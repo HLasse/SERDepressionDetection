@@ -1,0 +1,976 @@
+---
+title: "Publication_script"
+author: "Lasse Hansen"
+output: html_document
+---
+
+```{r opts, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.path = "images/",
+  dev = c("png", "svg"),
+  dpi=500
+)
+```
+
+# Setup
+```{r}
+pacman::p_load(tidyverse, RColorBrewer, patchwork,
+               colorspace, scico, pROC, ggpmisc, 
+               knitr, kableExtra, brms, broom, broom.mixed, 
+               tidybayes, bayesplot, here, glue)
+
+
+# Read MFCC data
+df <- read.csv("data/publication_data.csv")
+
+# Read MFCC data with column indicating whether speaker diarization/segmentation has taken place
+seg_df <- read_csv('data/seg_no_seg.csv') %>% 
+  mutate(Diagnosis_visit =  Diagnosis_only,
+         Diagnosis_only = str_sub(Diagnosis_only,end=-2),
+         visit = str_sub(Diagnosis_visit, start = -1)) %>% 
+  # dc19 and dc15 are the same person, removing one
+  # dp41 is only in the remission data (no audio from visit 1)
+  filter(id_full != 'dc19', id_full != 'dp41') %>% 
+  mutate(Diagnosis_rem = case_when(
+    as.character(Diagnosis_visit) == "Depression1" ~ "Depression\n(First visit)",
+    as.character(Diagnosis_visit) == "Depression2" ~ "Depression\n(Second visit)",
+    as.character(Diagnosis_visit) == "Controls1" ~ "Controls\n(First visit)",
+    as.character(Diagnosis_visit) == "Controls2" ~ "Controls\n(Second visit)",
+    )
+  )
+
+
+# Set large text size for publication plots
+theme_set(theme_minimal(base_size = 18))
+
+# Set color palettes
+d_v_pal <- darken(RColorBrewer::brewer.pal(6, 'Paired'), 0.2)[c(1,2,5,6)]
+rem_pal <- d_v_pal
+rem_pal[4] <- "#34BF39"
+
+# Mute annoying summarise message
+options(dplyr.summarise.inform=F)
+# Set number of parallel MCMC cores
+
+options(mc.cores = parallel::detectCores())
+
+# function to convert probabilities back to log odds space
+prob_to_log_odds <- function(prob) log(prob / (1 - prob))
+
+# Filtered datasets only including the clean data (no background noise) and 30 second time bins or no windowing
+wdf_30 <- df %>% 
+  filter(clean == 'clean', window_size == '30') %>% 
+  mutate(log_odds = prob_to_log_odds(probs)) 
+  
+
+wdf_full <- df %>% 
+  filter(clean == 'clean', window_size == 'full')
+```
+
+
+# Main Manuscript
+## Table 1
+```{r table_1}
+###### 
+#This requires a dataset with more data on the participants and can therefore not be directly reproduced
+######
+# 
+# wdf_full %>% 
+#   group_by(visit, Diagnosis_only, Gender) %>% 
+#   summarise(n = n(), 
+#             Hamilton = mean(HamD17_Before, na.rm=TRUE), 
+#             Hamilton_IQR = IQR(HamD17_Before, na.rm=TRUE), 
+#             age = mean(Age, na.rm=T), 
+#             Age_min = min(Age, na.rm=T), 
+#             Age_max = max(Age, na.rm=T)) %>% 
+#     mutate(age_range = paste(Age_min, Age_max, sep="-")) %>% 
+#     ungroup() %>% 
+#     select(-c(Age_min, Age_max, visit)) %>%
+#     kbl(digits=1, col.names = c("Diagnosis", "Gender", "N",
+#                               "Hamilton mean", "Hamilton IQR",
+#                               "Age mean", "Age Range")) %>% 
+#     kable_classic(full_width = F) %>% 
+#     pack_rows("Visit 1", 1, 4) %>% 
+#     pack_rows("Visit 2", 5, 8)
+```
+
+## Figure 1
+### Figure 1a
+```{r fig1_a}
+fig1_a <- wdf_30 %>%
+  mutate(visit = as.factor(visit)) %>%
+  group_by(Diagnosis_rem, id_full) %>% 
+  summarise(probs = mean(probs)) %>%
+  group_by(Diagnosis_rem) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  mutate(Diagnosis_rem = paste0(Diagnosis_rem,'\nN = ',n)) %>% 
+  
+  ggplot(aes(Diagnosis_rem, probs, fill=Diagnosis_rem, color=Diagnosis_rem)) +
+    geom_point(alpha=0.5, position = position_jitterdodge(jitter.width = 0.1)) +
+    geom_boxplot(aes(group=Diagnosis_rem), alpha=0.3, width = 0.5, color='black') +
+    ylim(0,1) +
+    theme(legend.position = 'none',
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank()) +
+    scale_color_manual(values=rem_pal) +
+    scale_fill_manual(values=rem_pal) +
+    labs(y = "P(Happy)")
+```
+
+### Fig 1b
+```{r fig1_b}
+# Load model. See `model.Rmd` for model building.
+mix_m <- readRDS(here("models", "mixture_model_sdprior_3_1.rds"))
+# Extract mixing factors
+ppm <- pp_mixture(mix_m)
+# Extract mixing factor for group 1 (the other is just 1- that) 
+wdf_30$theta_1 <-  ppm[, 1,][,1]
+wdf_30$theta_2 <- 1 - wdf_30$theta_1 
+
+
+
+# mean theta2 by id and group (for consistency with whats positive and negative)
+fig1_b <- wdf_30 %>% 
+  group_by(Diagnosis_rem, id_full) %>% 
+  summarise(mean_theta = mean(theta_2)) %>% 
+  ggplot(aes(mean_theta, Diagnosis_rem, fill=Diagnosis_rem, color=Diagnosis_rem)) +
+  stat_dots(size=2, alpha=1) +
+  scale_fill_manual(values = rem_pal) + 
+  scale_color_manual(values = rem_pal) + 
+  labs(x = expression(theta)) +
+  theme(legend.position="none",
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank())
+```
+
+### Figure 1c
+```{r fig1_c}
+n_samples <-  4000
+
+preprocess_samples <- function(df){
+  # Add visit column
+  samps_preproc <- df %>% 
+    as_tibble() %>% 
+    rename(Depression = V1, Remission = V2, Controls1 = V3, Controls2 = V4) %>%  
+    gather() %>% 
+    mutate(visit = c(rep("Visit 1", 2*n_samples), 
+                     rep("Visit 2", 2*n_samples), 
+                     rep("Visit 1", 2*n_samples), 
+                     rep("Visit 2", 2*n_samples)))
+  return(samps_preproc)
+}
+
+dummy_df <- tribble(~Diagnosis_only, ~visit,
+                    "Depression", 0,
+                    "Depression", 1,
+                    "Controls", 0,
+                    "Controls", 1)
+
+samps_mix <- predict(mix_m, dummy_df, re_formula = NA, transform = inv_logit_scaled)
+samps_raw_mix <- predict(mix_m, dummy_df, re_formula = NA, transform = inv_logit_scaled, summary=F) 
+
+fig1_c <- samps_raw_mix %>% 
+  preprocess_samples(.) %>% 
+   mutate(key = case_when(
+    as.character(key) == "Depression" ~ "Depression\n(first visit)\nN = 40",
+    as.character(key) == "Remission" ~ "Depression\n(second visit)\nN = 25",
+    as.character(key) == "Controls1" ~ "Controls\n(First visit)\nN = 42",
+    as.character(key) == "Controls2" ~ "Controls\n(second visit)\nN = 25"
+  )
+  ) %>% 
+  ggplot(aes(value, visit, color = key, fill = key)) +
+    stat_halfeye(alpha = 0.5) +
+    coord_cartesian(xlim=c(0, 1)) +
+    scale_color_manual(values = rem_pal) +
+    scale_fill_manual(values = rem_pal) +
+    labs(x = "P(Happy)") + 
+    theme(legend.position = "bottom",
+          legend.title = element_blank(),
+          axis.title.y = element_blank(),
+          legend.text.align = 0.5) 
+
+# Row ordering: dep, rem, cont1, cont2
+samps_mix
+```
+
+
+### Fig1 combined
+```{r fig1}
+(fig1_a | fig1_b) / (fig1_c ) +
+  plot_annotation(tag_levels = "A") 
+
+fig1_c <- fig1_c + guides(fill=guide_legend(ncol=2), color=guide_legend(ncol=2))
+fig1_a + fig1_b + fig1_c + guide_area() + plot_layout(guides = "collect")
+```
+
+## Figure 2
+### Fig2a
+```{r fig2a}
+roc_pal <- c("#d18975", "#8fd175")
+
+make_roc_plot <- function(df, clean){
+
+  roc_df_30 <- df %>% 
+    filter(visit == 1, window_size == '30', clean == !!clean) 
+
+  roc_df_full <- df %>% 
+    filter(visit == 1, window_size == '30', clean == !!clean) %>% 
+    group_by(id_full, Diagnosis_only) %>% 
+    summarise(probs = mean(probs))
+  
+  roc_30 <- roc(roc_df_30$Diagnosis_only, roc_df_30$probs)
+  roc_full <- roc(roc_df_full$Diagnosis_only, roc_df_full$probs)
+  
+  auc_30 <- auc(roc_30)[1]
+  auc_full <- auc(roc_full)[1]
+  
+  thres_df <- pROC::coords(roc_30, 'best', transpose = F, ret=c("threshold", "specificity", "sensitivity", "precision")) %>% 
+    bind_rows(pROC::coords(roc_full, "best", transpose = F, ret=c("threshold", "specificity", "sensitivity", "precision"))) %>% 
+    mutate(AUC = c(auc_30, auc_full),
+           across(where(is.numeric), round, 2),
+           Type = c("Windows", "Summary")) %>% 
+    relocate(Type, AUC) %>% 
+    rename(Threshold = threshold, Specificity = specificity, Sensitivity = sensitivity, Precision = precision)
+  
+  
+  p <- ggroc(list(Windows = roc_30, Summary = roc_full), legacy.axes = T) +
+    xlab("FPR") + ylab("TPR") +
+    scale_color_manual(values = roc_pal) +
+    geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="darkgrey", linetype="dashed") +
+    #annotate(geom = 'table', x = 0.08, y = 0.2, label = list(thres_df), vjust = 1, hjust = 0, alpha=0.5) +
+    geom_table(data=thres_df, aes(x=0.08, y=0.2, label=list(thres_df)), 
+               vjust =1, hjust=0) +
+    theme(legend.title = element_blank(),
+          legend.position = 'bottom')+
+    coord_fixed()
+
+  return(p)
+}
+
+fig2_a <- make_roc_plot(df, "clean")
+```
+
+### Fig2b
+```{r fig2b}
+wdf_30_v1 <- wdf_30 %>% 
+  filter(visit==1) %>% 
+  mutate(Diagnosis_rem = case_when(
+    Diagnosis_rem == "Controls\n(First visit)" ~ "Controls\n(First visit)\nN = 42",
+    Diagnosis_rem == "Depression\n(First visit)" ~ "Depression\n(First visit)\nN = 40",
+  ))
+
+fig2_b <- wdf_30_v1 %>% 
+  group_by(id_full) %>% 
+  # Add column with 'time' based on number of windows
+  mutate(consec = sequence(rle(as.character(id_full))$lengths)) %>% 
+  ungroup() %>%
+  group_by(Diagnosis_rem) %>% 
+  mutate(id_full = fct_reorder(id_full, probs, .fun = median, .desc=TRUE)) %>% 
+  ggplot(aes(consec-1, id_full, fill=probs)) +
+  geom_tile() +
+  facet_wrap(~Diagnosis_rem, scales='free_y') +
+  scale_fill_scico(palette = 'lajolla', direction = -1) +
+  labs(x = 'Time (30 sec windows)', y = "ID", fill='P(Happy)') +
+  theme(axis.text.y = element_blank(),
+        legend.position = "bottom")
+
+```
+
+### Figure 2 combined
+```{r fig2}
+fig2_a + fig2_b + plot_annotation(tag_levels = "A")
+```
+
+## Figure 3
+### fig3 a
+```{r fig3_a}
+ns = wdf_30 %>% 
+  group_by(Diagnosis_rem, id_full) %>% 
+  tally() %>% 
+  group_by(Diagnosis_rem) %>% 
+  tally()
+
+denoise <- df %>% 
+  filter(window_size=='30') %>% 
+  group_by(Diagnosis_rem, id_full, clean) %>% 
+  summarise(probs = mean(probs)) %>% 
+  mutate(preproc = ifelse(clean == "clean", "Diarized", "Raw")) %>% 
+  select(Diagnosis_rem, id_full, probs, preproc)
+
+fig3_a <- seg_df %>% 
+  filter(segmented == FALSE) %>% 
+  group_by(Diagnosis_rem, id_full) %>% 
+  summarise(probs = mean(probs)) %>% 
+  mutate(preproc = "Not diarized") %>% 
+  bind_rows(denoise) %>% 
+  left_join(ns, by="Diagnosis_rem") %>% 
+  mutate(Diagnosis_rem = paste0(Diagnosis_rem,'\nN = ',n),
+         preproc = fct_rev(as.factor(preproc))) %>% 
+  ggplot(aes(Diagnosis_rem, probs, fill = preproc)) +
+    geom_boxplot(width=.5, alpha=0.5, color='black') +
+    scale_fill_brewer(palette = "Dark2", direction=-1) +
+    ylim(0, 1) +
+    labs(y = 'P(Happy)') +
+    theme(axis.title.x = element_blank(),
+          legend.title = element_blank(),
+          legend.position="bottom")
+```
+
+### fig3 b preprocessing
+```{r fig3_b_preproc}
+
+get_auc <- function(df, clean, seg_df=F, return_roc_obj=F){
+  
+  if(seg_df){
+    roc_df_30 <- df %>% 
+      filter(visit == 1, window_size == '30', segmented == F)
+    
+    roc_df_full <- df %>% 
+      filter(visit == 1, window_size == '30', segmented == F) %>% 
+      group_by(id_full, Diagnosis_only) %>% 
+      summarise(probs = mean(probs))
+  }
+  else{
+    roc_df_30 <- df %>% 
+      filter(visit == 1, window_size == '30', clean == !!clean) 
+    
+    roc_df_full <- df %>% 
+      filter(visit == 1, window_size == '30', clean == !!clean) %>% 
+      group_by(id_full, Diagnosis_only) %>% 
+      summarise(probs = mean(probs))
+  }
+  
+  roc_30 <- roc(roc_df_30$Diagnosis_only, roc_df_30$probs)
+  ci_low_30 <- round(ci.auc(roc_30)[1], 2)
+  ci_high_30 <- round(ci.auc(roc_30)[3], 2)
+  roc_full <- roc(roc_df_full$Diagnosis_only, roc_df_full$probs)
+  ci_low_full <- round(ci.auc(roc_full)[1], 2)
+  ci_high_full <- round(ci.auc(roc_full)[3], 2)
+  
+  auc_30 <- auc(roc_30)[1]
+  auc_full <- auc(roc_full)[1]
+  
+  thres_df <- pROC::coords(roc_30, 
+                           'best', 
+                           transpose = F, 
+                           ret=c("threshold", "specificity", 
+                                 "sensitivity", "precision")) %>% 
+    bind_rows(pROC::coords(roc_full, 
+                           "best", 
+                           transpose = F, 
+                           ret=c("threshold", "specificity", 
+                                 "sensitivity", "precision"))) %>% 
+    mutate(AUC = c(auc_30, auc_full),
+           `AUC CI` = c(paste(ci_low_30, ci_high_30, sep="-"), 
+                        paste(ci_low_full, ci_high_full, sep="-")),
+           across(where(is.numeric), round, 2),
+           Type = c("Windows", "Summary")) %>% 
+    relocate(Type, AUC, `AUC CI`) %>% 
+    rename(Threshold = threshold, Specificity = specificity, 
+           Sensitivity = sensitivity, Precision = precision) %>% 
+    as_tibble()
+  
+  if(clean != "null"){
+    thres_df <- thres_df %>% 
+      mutate(Data = clean)
+  }
+  else{
+    thres_df <- thres_df %>% 
+      mutate(Data = "seg")
+  }
+  
+  if(return_roc_obj){
+    return(list("30" = roc_30, "full" = roc_full))
+  }
+  else{
+    return(thres_df)
+  }
+}
+
+### move to S part
+clean_auc <- get_auc(df, "clean")
+raw_auc <- get_auc(df, "raw")
+seg_auc <- get_auc(seg_df, "null", T)
+
+bind_rows(clean_auc, raw_auc, seg_auc) %>% 
+  relocate(Data) %>% 
+  arrange(Type, desc(AUC)) %>% 
+  select(-Type) %>% 
+  mutate(Data= recode(Data, clean = "Diarized", raw = "Raw", seg = "Not diarized")) %>% 
+  kbl() %>% 
+  kable_classic(full_width = F) %>% 
+  pack_rows("Summary", 1, 3) %>% 
+  pack_rows("Windows", 4, 6)
+```
+### fig3 b
+```{r}
+clean_rocs <- get_auc(df, "clean", return_roc_obj = T)
+raw_rocs <- get_auc(df, "raw", return_roc_obj = T)
+seg_rocs <- get_auc(seg_df, "null", T, return_roc_obj = T)
+
+fig3_b <- ggroc(list(`Raw` = raw_rocs$`30`,
+           `Not diarized` = seg_rocs$`30`,
+           `Diarized` = clean_rocs$`30`),
+      legacy.axes = T) +
+  xlab("FPR") + ylab("TPR") +
+  scale_color_brewer(palette = 'Dark2', direction = -1) +
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="darkgrey", linetype="dashed") +
+  theme(legend.title = element_blank(),
+        legend.position = 'bottom')+
+  coord_fixed()
+```
+
+### fig3 c
+```{r fig3_c}
+# Fit roc on window basis
+fit_roc <- function(df) roc(df$Diagnosis_only, df$probs)
+# Fit roc summarised by id
+fit_roc_summarized <- function(df){
+  df <- df %>% 
+    group_by(id_full, Diagnosis_only) %>% 
+    summarise(probs = mean(probs))
+  return(fit_roc(df))
+}
+extract_auc_ci <- function(roc_fit){
+  auc_ci <- ci(roc_fit)
+  return(data.frame(auc_low = auc_ci[1], auc = auc_ci[2], auc_high = auc_ci[3]))
+} 
+
+
+clean_v1_df <- df %>% 
+  filter(clean == "clean", visit == 1) %>% 
+  group_by(window_size) %>% 
+  nest()
+
+rocs_window <- clean_v1_df %>% 
+  mutate(roc_fit = map(data, fit_roc)) %>% 
+  mutate(aucs = map(roc_fit, extract_auc_ci),
+         summarised = F) 
+
+rocs_summarized <- clean_v1_df %>% 
+  mutate(roc_fit = map(data, fit_roc_summarized)) %>% 
+  mutate(aucs = map(roc_fit, extract_auc_ci),
+         summarised = T) 
+
+level_order <- c('2', '5', '10', '15', '20', '25', '30', 'full')
+
+fig3_c <- rocs_window %>% 
+  unnest(aucs) %>%
+  ggplot(aes(factor(window_size, level = level_order), auc, color = summarised)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = auc_low, ymax = auc_high), width = 0.5) +
+  scale_color_manual(values = c("#56B4E9")) +
+  labs(x = "Window size (seconds)", y = "AUC", color = "Summarized") +
+  theme(legend.position="none")
+
+```
+### Figure 3 combined
+```{r fig3}
+fig3_a / (fig3_b | fig3_c) + plot_annotation(tag_levels = "A") 
+```
+
+
+
+# In-text numbers
+## Mixture-model
+```{r}
+mix_m
+
+# how to correctly calculate the standard deviation of the two distributions?
+
+# mu1_intercept
+mu1 <- inv_logit_scaled(-1.18)
+# mu2_intercept
+mu2 <- inv_logit_scaled(0.38)
+
+# sigma 1
+sigma1_low <- inv_logit_scaled(-1.18 - 0.66)
+sigma1_high <- inv_logit_scaled(-1.18 + 0.66)
+# sigma 2
+sigma2_low <- inv_logit_scaled(0.38 - 0.32)
+sigma2_high <- inv_logit_scaled(0.38 + 0.32)
+
+mu1
+mu1 - sigma1_low
+sigma1_high - mu1
+# is this correct?
+# which one to report? other way to calculate sd in probability space?
+mu2
+mu2 - sigma2_low
+sigma2_high - mu2
+
+tidy(mix_m, parameters = "^b") %>% 
+  mutate(across(where(is.numeric), ~ inv_logit_scaled(.x)))
+
+tidy(mix_m, parameters = "^sigma") %>% 
+  mutate(across(where(is.numeric), ~ inv_logit_scaled(.x)))
+# Seems way too large when looking at the distributions. ~ 0.1 more likely. 
+```
+## Number of correct predictions with optimal cut-off
+```{r}
+cutoff_preds <- wdf_30 %>% 
+  group_by(Diagnosis_visit, id_full) %>% 
+  summarize(probs = mean(probs)) %>% 
+  mutate(pred = if_else(probs > 0.3831379, 1, 0))  
+
+cutoff_preds %>% 
+  group_by(Diagnosis_visit) %>% 
+  summarise(sum_pred_control = sum(pred), n = n()) %>% 
+  mutate(percent_pred_control = sum_pred_control / n * 100)
+# Number/percent of participants predicted as controls
+```
+
+
+# Supplementary Materials
+## Table S1
+```{r descriptive stats}
+# Table
+
+seg_dur <- wdf_30 %>% 
+  group_by(Diagnosis_only, visit, id_full) %>% 
+  summarize(n_windows = n()) %>% 
+  group_by(Diagnosis_only, visit) %>% 
+  summarize(mean_duration = mean(n_windows)/2, sd_duration = sd(n_windows)/2)
+
+non_seg_dur <- seg_df %>% 
+  filter(segmented == F) %>% 
+  group_by(Diagnosis_only, visit, id_full) %>% 
+  summarize(n_windows = n()) %>% 
+  group_by(Diagnosis_only, visit) %>% 
+  summarize(mean_duration_total = mean(n_windows)/2, sd_duration_total = sd(n_windows)/2)
+
+seg_dur %>% merge(non_seg_dur, by=c("Diagnosis_only", "visit")) %>%
+  kbl(digits = 2, col.names = c("Diagnosis",
+                           "Visit",
+                           "Mean",
+                           "SD",
+                           "Mean",
+                           "SD")) %>%
+  kable_classic(full_width = F) %>%
+  add_header_above(c(" " = 2, "Participant speech duration" = 2, "Total speech duration" = 2))
+
+## Calculating interview length requires access to the raw data files and is therefore not included in this script.
+
+```
+
+## Figure S1
+### fig s1 a
+```{r fig_s1_a}
+fig_s1_a <- wdf_30 %>% 
+  group_by(id_full, visit, Diagnosis_only) %>% 
+  summarise(mean_prob = mean(probs)) %>% 
+  group_by(id_full, Diagnosis_only) %>% 
+  summarise(dif = diff(mean_prob)) %>% 
+  mutate(absolute = abs(dif)) %>% 
+  arrange(desc(dif)) %>% 
+  ungroup() %>% 
+  mutate(id_full = fct_reorder(id_full, dif, .desc=FALSE)) %>% 
+
+  ggplot(aes(id_full, dif, color=Diagnosis_only)) +
+    geom_segment(aes(x=id_full, xend=id_full, y=0, yend=dif)) +
+    geom_point(size=2) +
+    coord_flip(ylim=c(-0.5, 0.5)) +
+    scale_color_brewer(palette = "Set1", direction = -1) +
+    labs(y="Difference in P(happy)", x="ID") +
+    theme(legend.title = element_blank(),
+          axis.text.y = element_blank(),
+          legend.position = 'bottom')
+
+
+```
+
+### fig s1 b
+```{r}
+cont_heat <- wdf_30 %>% 
+  filter(Diagnosis_only == 'Controls') %>% 
+  mutate(visit = paste('Visit', visit)) %>% 
+  group_by(Diagnosis_only, visit, id_full) %>% 
+  # Add column with 'time' based on number of windows
+  mutate(consec = sequence(rle(as.character(id_full))$lengths)) %>% 
+  ungroup() %>%
+  group_by(Diagnosis_only, visit) %>% 
+  mutate(id_full = fct_reorder(id_full, probs, .fun = median, .desc=TRUE)) %>% 
+  ggplot(aes(consec-1, id_full, fill=probs)) +
+  geom_tile() +
+  facet_grid(Diagnosis_only ~ visit) +
+  #facet_wrap(~Diagnosis_only, scales='free_y') +
+  scale_fill_scico(palette = 'lajolla', direction = -1) +
+  labs(x = 'Time', fill='P(Happy)') +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position="bottom")
+
+dep_heat <- wdf_30 %>% 
+  filter(Diagnosis_only == 'Depression') %>% 
+  mutate(visit = paste('Visit', visit)) %>% 
+  group_by(Diagnosis_only, visit, id_full) %>% 
+  # Add column with 'time' based on number of windows
+  mutate(consec = sequence(rle(as.character(id_full))$lengths)) %>% 
+  ungroup() %>%
+  group_by(Diagnosis_only, visit) %>% 
+  mutate(id_full = fct_reorder(id_full, probs, .fun = median, .desc=TRUE)) %>% 
+  ggplot(aes(consec-1, id_full, fill=probs)) +
+  geom_tile() +
+  facet_grid(Diagnosis_only ~ visit) +
+  #facet_wrap(~Diagnosis_only, scales='free_y') +
+  scale_fill_scico(palette = 'lajolla', direction = -1) +
+  labs(x = 'Time', fill='P(Happy)') +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "none")
+
+
+fig_s1_b <- (dep_heat + theme(legend.position = 'none')) / cont_heat  & theme(strip.background = element_rect(color = 'grey'))
+```
+
+### Figure S1 combined
+```{r fig_s1}
+layout <- "
+AAA
+AAA
+AAA
+AAA
+BBB
+BBB
+BBB
+BBB
+BBB
+BBB
+BBB
+BBB
+"
+fig_s1_a / fig_s1_b + plot_layout(design = layout) + plot_annotation(tag_levels = list(c("A", "B", "")))
+```
+
+
+## Figure S2
+```{r fig_s2}
+plot_and_print_dif <- function(df, col, title=NULL, xlim=NULL){
+  if(is.null(title)) title <- col
+  p <- df %>% 
+    ggplot(aes_string(col))
+  if(!is.null(xlim)){
+    p <- p +
+      xlim(xlim)
+  }
+  p <- p +
+    stat_halfeye() +
+    labs(x = "P(Happy)", y = "Density", title = title)
+  
+  quants <- quantile(df[[col]], c(0.025, 0.5, 0.975))
+  return(list(plot=p, quants=quants))
+}
+
+# Based on dummy samples
+diffs <- samps_raw_mix %>% 
+  preprocess_samples() %>% 
+  mutate(block = rep(seq(from=1, to=2*n_samples), 4)) %>% # Fix pivoting error (avoid duplicate rows)
+  select(-visit) %>% 
+  pivot_wider(names_from = key, values_from = value) %>% 
+  mutate(diff_dep_cont = Controls1 - Depression,
+         diff_dep_rem = Remission - Depression,
+         diff_cont_rem = Controls1 - Remission,
+         diff_cont = Controls1 - Controls2) 
+
+dummy_dep_cont <- plot_and_print_dif(diffs, "diff_dep_cont", "Controls1 - Depression2")
+dummy_dep_rem <- plot_and_print_dif(diffs, "diff_dep_rem", "Depression2 - Depression1")
+dummy_cont_rem <- plot_and_print_dif(diffs, "diff_cont_rem", "Controls1 - Depression2")
+dummy_cont <- plot_and_print_dif(diffs, "diff_cont", "Controls1 - Controls2")
+
+(dummy_cont_rem$plot + dummy_cont$plot) /
+  (dummy_dep_cont$plot + dummy_dep_rem$plot) 
+
+
+
+tibble(dep_cont = dummy_dep_cont$quants,
+       dep_rem = dummy_dep_rem$quants,
+       cont_rem = dummy_cont_rem$quants,
+       cont = dummy_cont$quants) %>% 
+  t(.) %>% 
+  as.data.frame() %>% 
+  kbl(digits=3,
+      format="html",
+      row.names = T, 
+      col.names = c("2.5%", "Median", "97.5%")) %>% 
+  kable_classic(full_width=F)
+```
+
+## Figure S3
+### BEST - functions
+```{r best_functions}
+# BEST t-test (Kruschke 2013)
+# Code adapted from https://www.andrewheiss.com/blog/2019/01/29/diff-means-half-dozen-ways/#regression-best-with-priors-on-variables-instead-of-difference
+
+
+run_BEST <- function(df, file){
+  # Setting reasonable priors
+  priors <- c(set_prior("normal(0, 0.5)", class = "b"), #
+              # Setting prior for nu to 1/29 in line with BEST paper
+              set_prior("exponential(1.0/29)", class = "nu"))
+  
+  best_brms <- brm(bf(probs ~ 0 + Diagnosis_only + (1|gr(id_full, by=Diagnosis_only)), 
+                      # assessing the effect of diagnosis on probs (no intercept)
+                      sigma ~ 0 + Diagnosis_only + (1|gr(id_full, by=Diagnosis_only))), 
+                      # assessing the whether there is a difference in sigmas by diagnosis
+                   prior = priors,
+                   data=df, 
+                   family=student,
+                   chains=4,
+                   iter=6000,
+                   warmup=2000,
+                   seed=60,
+                   file = file)
+}
+
+# Calculate difference in group means.
+# Extract posterior samples from each group, subtract them, 
+# calculate CI
+calc_post_diff_means <- function(brms_model) {
+  
+  groups_post <- posterior_samples(brms_model) %>% 
+    # Exponentiating sigma
+    mutate_at(vars(contains("sigma")), funs(exp)) %>% 
+    # Need to log nu
+    mutate(nu = log10(nu)) %>% 
+    mutate(diff_means = b_Diagnosis_onlyControls - b_Diagnosis_onlyDepression,
+           diff_sigma = 
+             b_sigma_Diagnosis_onlyControls - b_sigma_Diagnosis_onlyDepression) %>% 
+    # Calculate effect size (Cohen's d and common language ES)
+    mutate(cohen_d = diff_means / 
+             sqrt((b_sigma_Diagnosis_onlyControls + b_sigma_Diagnosis_onlyDepression)/2),
+           cles = dnorm(diff_means / sqrt((b_sigma_Diagnosis_onlyControls + b_sigma_Diagnosis_onlyDepression)), 0, 1))
+  
+  return(groups_post)
+}
+
+# Tidy output and calculate 95% HDI
+tidy_post_means <- function(groups_post) {
+  
+  groups_post_tidy <- groups_post %>% 
+    tidyMCMC(conf.int = TRUE, conf.level = 0.95, 
+             estimate.method = "median", conf.method = "HPDinterval")
+  return(groups_post_tidy)
+}
+
+# Identify columns of interest
+get_keep_cols <- function(tidy_post_means) {
+  keep_cols <- bind_rows(head(tidy_post_means, 4), 
+                         tail(tidy_post_means, 4)) %>% 
+    pull(term)
+  return(keep_cols)
+  
+}
+```
+### BEST - run models
+```{r best_run_models}
+# Setting up dataframes
+clean_v1 <- wdf_30 %>% 
+  filter(visit == 1)
+
+raw_v1 <- df %>% 
+  filter(visit == 1, clean == 'raw', window_size == '30')
+
+non_seg <- seg_df %>% 
+  filter(visit == 1, segmented == F)
+
+# Parallel processing
+options(mc.cores = parallel::detectCores())
+
+dfs <- list(Diarized = clean_v1, Raw = raw_v1, `Not diarized` = non_seg)
+brms_files <- c('best_brms', 'raw_brms', 'non_seg_brms')
+
+# Train BEST model on each dataset
+models <- dfs %>% map2(brms_files, run_BEST)
+```
+### BEST - plot (figure S3)
+```{r fig_s3}
+# Extract posterior samples and calculate difference in means
+groups_post <- map(models, calc_post_diff_means)
+# Get tidy output posterior samples
+groups_post_tidy <- map(groups_post, tidy_post_means)
+# Extract names of the columns to plot
+keep_cols <- get_keep_cols(groups_post_tidy$Diarized)
+
+# Plot
+main_post_plot <- groups_post %>% 
+  bind_rows(.id = "Dataset") %>% 
+  select(all_of(keep_cols), Dataset, -c(cles, cohen_d)) %>% 
+  pivot_longer(cols = c(everything(), -Dataset)) %>% 
+  mutate(name = str_remove(name, "Diagnosis_only"),
+         Dataset = fct_rev(Dataset)) %>% 
+  filter(!(name %in% c("diff_means", "diff_sigma"))) %>% 
+  mutate(name = case_when(name == "b_Controls" ~ "\u03bc Controls",
+                          name == "b_Depression" ~ "\u03bc Depression",
+                          name == "b_sigma_Depression" ~ "\u03C3 Depression",
+                          name == "b_sigma_Controls" ~ "\u03C3 Controls")
+         ) %>% 
+  ggplot(aes(x=value, y=fct_rev(name), 
+             color = Dataset, fill = Dataset)) +
+  stat_halfeye(.width = c(0.66, 0.95), alpha = 0.5) +
+  #scale_y_discrete(labels = c("b_Controls" = expression(mu, "Controls"))) %>% 
+  scale_fill_brewer(palette = 'Dark2', direction = -1) +
+  scale_color_brewer(palette = 'Dark2', direction = -1) +
+  labs(x = "P(Happy)") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.y = element_blank()) 
+
+
+cohen_d_plot <- groups_post %>% 
+  bind_rows(.id = "Dataset") %>% 
+  select(cohen_d, Dataset) %>% 
+  pivot_longer(cols = c(everything(), -Dataset)) %>% 
+  mutate(name = str_remove(name, "Diagnosis_only"),
+         Dataset = fct_rev(Dataset)) %>% 
+  mutate(name = ifelse(name == "cohen_d", "Cohen's d")) %>% 
+  ggplot(aes(x=value, y=fct_rev(name), 
+             color = Dataset, fill = Dataset)) +
+  stat_halfeye(.width = c(0.66, 0.95), alpha = 0.5) +
+  scale_fill_brewer(palette = 'Dark2', direction = -1) +
+  scale_color_brewer(palette = 'Dark2', direction = -1) +
+  labs(x = "Cohen's d") +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.y = element_blank())
+
+# figure s3
+main_post_plot / cohen_d_plot +
+  plot_layout(guides = "collect", heights = unit(c(5, 0.5), c('cm'))) & 
+  theme(legend.position = 'bottom')
+```
+
+
+## Table S2
+```{r}
+clean_auc <- get_auc(df, "clean")
+raw_auc <- get_auc(df, "raw")
+seg_auc <- get_auc(seg_df, "null", T)
+
+bind_rows(clean_auc, raw_auc, seg_auc) %>% 
+  relocate(Data) %>% 
+  arrange(Type, desc(AUC)) %>% 
+  select(-Type) %>% 
+  mutate(Data= recode(Data, clean = "Diarized", raw = "Raw", seg = "Not diarized")) %>% 
+  kbl() %>% 
+  kable_classic(full_width = F) %>% 
+  pack_rows("Summary", 1, 3) %>% 
+  pack_rows("Windows", 4, 6)
+```
+
+## Table S3
+```{r table_s3}
+groups_post %>%
+  bind_rows(.id = "Dataset") %>%
+  select(all_of(keep_cols), Dataset, -c(cles)) %>%
+  pivot_longer(cols = c(everything(), -Dataset)) %>%
+  mutate(name = str_remove(name, "Diagnosis_only"),
+         Dataset = fct_rev(Dataset)) %>%
+  mutate(name = case_when(name == "b_Controls" ~ "\u03bc Controls",
+                          name == "b_Depression" ~ "\u03bc Depression",
+                          name == "b_sigma_Depression" ~ "\u03C3 Depression",
+                          name == "b_sigma_Controls" ~ "\u03C3 Controls",
+                          TRUE ~ name)
+  ) %>%
+  group_by(name, Dataset) %>%
+  mean_qi(value) %>%
+  ungroup() %>%
+  select(Dataset, value, .lower, .upper) %>%
+  kbl(digits=2) %>%
+  kable_classic(full_width = F) %>%
+  pack_rows("Cohen's d", 1, 3) %>%
+  pack_rows("Diff. means", 4, 6) %>%
+  pack_rows("Diff. sigma", 7, 9) %>%
+  pack_rows("\u03bc Controls", 10, 12) %>%
+  pack_rows("\u03bc Depression", 13, 15) %>%
+  pack_rows("\u03C3 Controls", 16, 18) %>%
+  pack_rows("\u03C3 Depression", 19, 21)
+
+  
+```
+
+
+## Figure S4
+### fig s4 a
+```{r}
+### For model building see `model.Rmd` 
+# Finding those in remission
+remission_ids <- wdf_full %>% 
+  filter(Diagnosis_only == "Depression") %>% 
+  group_by(id_full) %>% 
+  summarise(n = n()) %>%
+  filter(n == 2) %>% 
+  pull(id_full)
+
+dep_30 <- wdf_30 %>% 
+  select(log_odds, id_full, Diagnosis_only, visit, probs) %>% 
+  filter(Diagnosis_only == "Depression", visit == 1) %>% 
+  mutate(Remission = if_else(id_full %in% remission_ids, 1, 0)) 
+
+brms_prognosis <- readRDS(here("models", "prognosis.Rds"))
+
+rem_post <- posterior_samples(brms_prognosis)
+
+dep <- rem_post$b_Intercept
+rem <- rem_post$b_Intercept + 
+  rem_post$b_Remission
+
+fig_s4a <- tibble(diff = dep - rem) %>% plot_and_print_dif("diff", "")
+```
+
+### fig s4 b
+```{r}
+fig_s4b <- dep_30 %>% 
+  mutate(Remission = if_else(Remission == 0, "No remission", "Remission")) %>% 
+  group_by(Remission, id_full) %>% 
+  summarise(probs = mean(probs)) %>%
+  group_by(Remission) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  mutate(Remission = paste0(Remission,'\nN = ',n)) %>% 
+  ggplot(aes(Remission, probs, fill=Remission, color=Remission)) +
+  geom_point(alpha=0.5, position = position_jitterdodge(jitter.width = 0.1)) +
+  geom_boxplot(aes(group=Remission), alpha=0.3, width = 0.5, color='black') +
+  ylim(0,1) +
+  theme(legend.position = 'none',
+        axis.title.x = element_blank()) +
+  scale_color_manual(values=c(rem_pal[2], rem_pal[4])) +
+  scale_fill_manual(values=c(rem_pal[2], rem_pal[4])) +
+  labs(y = "P(Happy)")
+```
+
+### Figure S4 combined
+```{r fig_s4}
+fig_s4a$plot / fig_s4b + plot_annotation(tag_levels = "A")
+```
+
+
+## Figure S5
+```{r fig_s5}
+# Sds by participant
+wdf_30 %>% 
+  group_by(Diagnosis_rem, id_full) %>% 
+  summarize(sd_probs = sd(probs)) %>% 
+  ggplot(aes(x=sd_probs, y=Diagnosis_rem, fill=Diagnosis_rem)) +
+  geom_point() +
+  stat_halfeye(.width=0, slab_alpha=0.5, aes(color=Diagnosis_rem)) +
+  scale_fill_manual(values=rem_pal) +
+  scale_color_manual(values=alpha(rem_pal, 0.2)) +
+  theme(legend.position = "none",
+        axis.title.y = element_blank()) +
+  labs(x = "Std of P(Happy)")
+```
+
+
+## Table S4
+```{r}
+wdf_30 %>% 
+  group_by(Diagnosis_visit, id_full) %>% 
+  summarize(sd_probs = sd(probs)) %>% 
+  group_by(Diagnosis_visit) %>% 
+  summarize(m = mean(sd_probs), s = sd(sd_probs)) %>% 
+  kbl(digits=3, col.names = c("Diagnosis", "Mean std P(Happy)", "Std of mean std P(Happy")) %>% 
+  kable_classic(full_width=F)
+```
+
