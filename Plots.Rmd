@@ -4,16 +4,6 @@ author: "Lasse Hansen"
 output: html_document
 ---
 
-```{r opts, echo = FALSE}
-knitr::opts_chunk$set(
-  fig.path = "publication_images/",
-  dev = c("png", "svg", "pdf"),
-  dpi=500,
-  fig.width = 10,
-  fig.height = 8
-)
-```
-
 # Setup
 ```{r setup}
 pacman::p_load(tidyverse, RColorBrewer, patchwork,
@@ -21,6 +11,15 @@ pacman::p_load(tidyverse, RColorBrewer, patchwork,
                knitr, kableExtra, brms, broom, broom.mixed, 
                tidybayes, bayesplot, here, glue)
 
+
+# make directories
+make_dir <- function(dir){
+  if (!dir.exists(dir)){
+    dir.create(dir)
+  }
+}
+dirs = c(here("figs"), here("supplementary"))
+map(dirs, make_dir)
 
 # Read MFCC data
 df <- read.csv("data/publication_data.csv")
@@ -209,7 +208,7 @@ fig1_a + fig1_b + fig1_c + guide_area() +
   plot_layout(guides = "collect") + 
   plot_annotation(tag_levels = "A")
 
-ggsave("publication/figs/fig1.pdf", dpi="retina", width = 10, height = 8)
+ggsave("figs/fig1.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 ## Figure 2 - ROC and heatmap
@@ -289,7 +288,7 @@ fig2_b <- wdf_30_v1 %>%
 ```{r fig2}
 fig2_a + fig2_b + plot_annotation(tag_levels = "A")
 
-ggsave("publication/figs/fig2.pdf", dpi="retina", width = 10, height = 8)
+ggsave("figs/fig2.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 ## Figure 3 - Preprocessing analysis
@@ -479,7 +478,7 @@ fig3_c <- rocs_window %>%
 ```{r fig3}
 fig3_a / (fig3_b | fig3_c) + plot_annotation(tag_levels = "A") 
 
-ggsave("publication/figs/fig3.pdf", dpi="retina", width = 10, height = 8)
+ggsave("figs/fig3.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 
@@ -648,7 +647,7 @@ fig_s1_b <- (dep_heat + theme(legend.position = 'none')) / cont_heat +
 fig_s1_a / fig_s1_b + 
   plot_annotation(tag_levels = list(c("A", "B", "")))
 
-ggsave("publication/supplementary/fig_s1.pdf", dpi="retina", width = 12.5, height = 10)
+ggsave("supplementary/fig_s1.pdf", dpi="retina", width = 12.5, height = 10)
 ```
 
 
@@ -689,7 +688,7 @@ dummy_cont <- plot_and_print_dif(diffs, "diff_cont", "Controls1 - Controls2")
 (dummy_cont_rem$plot + dummy_cont$plot) /
   (dummy_dep_cont$plot + dummy_dep_rem$plot) 
 
-ggsave("publication/supplementary/fig_s2.pdf", dpi="retina", width = 10, height = 8)
+ggsave("supplementary/fig_s2.pdf", dpi="retina", width = 10, height = 8)
 
 tibble(dep_cont = dummy_dep_cont$quants,
        dep_rem = dummy_dep_rem$quants,
@@ -786,7 +785,7 @@ non_seg <- seg_df %>%
 options(mc.cores = parallel::detectCores())
 
 dfs <- list(Diarized = clean_v1, Raw = raw_v1, `Not diarized` = non_seg)
-brms_files <- c('best_brms', 'raw_brms', 'non_seg_brms')
+brms_files <- c(here("models", 'best_brms'), here("models", 'raw_brms'), here("models", 'non_seg_brms'))
 
 # Train/load BEST model on each dataset
 models <- dfs %>% map2(brms_files, run_BEST)
@@ -847,7 +846,7 @@ main_post_plot / cohen_d_plot +
   plot_layout(guides = "collect", heights = unit(c(10, 1), c('cm'))) & 
   theme(legend.position = 'bottom')
 
-ggsave("publication/supplementary/fig_s3.pdf", dpi="retina", width = 10, height = 8, device = cairo_pdf)
+ggsave("supplementary/fig_s3.pdf", dpi="retina", width = 10, height = 8, device = cairo_pdf)
 ```
 
 
@@ -962,7 +961,7 @@ fig_s4a$plot / fig_s4b +
   plot_annotation(tag_levels = "A") +
   plot_layout(design = layout)
 
-ggsave("publication/supplementary/fig_s4.pdf", dpi="retina", width = 10, height = 8)
+ggsave("supplementary/fig_s4.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 
@@ -981,7 +980,7 @@ wdf_30 %>%
         axis.title.y = element_blank()) +
   labs(x = "Std of P(Happy)")
 
-ggsave("publication/supplementary/fig_s5.pdf", dpi="retina", width = 10, height = 8)
+ggsave("supplementary/fig_s5.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 
@@ -1006,7 +1005,7 @@ pp_post <- brms::pp_check(mix_m, nsamples=100)
 
 pp_prior / pp_post + plot_annotation(tag_level="A")
 
-ggsave("publication/supplementary/fig_s6.pdf", dpi="retina", width = 10, height = 8)
+ggsave("supplementary/fig_s6.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 ## Figure S7 - Posterior updates
@@ -1035,5 +1034,5 @@ posterior_samples(mix_m) %>%
     theme_minimal() +
     scale_fill_brewer(palette = "Pastel1")
 
-ggsave("publication/supplementary/fig_s7.pdf", dpi="retina", width = 10, height = 8)
+ggsave("supplementary/fig_s7.pdf", dpi="retina", width = 10, height = 8)
 ```

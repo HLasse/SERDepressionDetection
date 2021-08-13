@@ -22,6 +22,24 @@ df <- read.csv("data/publication_data.csv") %>%
   mutate(visit = as.numeric(visit) - 1,
          visit = as.factor(visit))
 
+
+# Read MFCC data with column indicating whether speaker diarization/segmentation has taken place
+seg_df <- read_csv('data/seg_no_seg.csv') %>% 
+  mutate(Diagnosis_visit =  Diagnosis_only,
+         Diagnosis_only = str_sub(Diagnosis_only,end=-2),
+         visit = str_sub(Diagnosis_visit, start = -1)) %>% 
+  # dc19 and dc15 are the same person, removing one
+  # dp41 is only in the remission data (no audio from visit 1)
+  filter(id_full != 'dc19', id_full != 'dp41') %>% 
+  mutate(Diagnosis_rem = case_when(
+    as.character(Diagnosis_visit) == "Depression1" ~ "Depression\n(First visit)",
+    as.character(Diagnosis_visit) == "Depression2" ~ "Depression\n(Second visit)",
+    as.character(Diagnosis_visit) == "Controls1" ~ "Controls\n(First visit)",
+    as.character(Diagnosis_visit) == "Controls2" ~ "Controls\n(Second visit)",
+    )
+  )
+
+
 # function to convert probabilities back to log odds space
 prob_to_log_odds <- function(prob) log(prob / (1 - prob))
 
@@ -152,7 +170,7 @@ non_seg <- seg_df %>%
 options(mc.cores = parallel::detectCores())
 
 dfs <- list(Diarized = clean_v1, Raw = raw_v1, `Not diarized` = non_seg)
-brms_files <- c('best_brms', 'raw_brms', 'non_seg_brms')
+brms_files <- c(here("models", 'best_brms'), here("models", 'raw_brms'), here("models", 'non_seg_brms'))
 
 # Train BEST model on each dataset
 models <- dfs %>% map2(brms_files, run_BEST)
@@ -190,6 +208,6 @@ brms_prognosis <- brm(log_odds ~
                       iter=8000,
                       warmup=2000,
                       seed=60,
-                      file = "prognosis")
+                      file = here("models", "prognosis"))
 
 ```
