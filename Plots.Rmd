@@ -1,19 +1,21 @@
 ---
-title: "Publication_script"
+title: "Plots"
 author: "Lasse Hansen"
 output: html_document
 ---
 
 ```{r opts, echo = FALSE}
 knitr::opts_chunk$set(
-  fig.path = "images/",
-  dev = c("png", "svg"),
-  dpi=500
+  fig.path = "publication_images/",
+  dev = c("png", "svg", "pdf"),
+  dpi=500,
+  fig.width = 10,
+  fig.height = 8
 )
 ```
 
 # Setup
-```{r}
+```{r setup}
 pacman::p_load(tidyverse, RColorBrewer, patchwork,
                colorspace, scico, pROC, ggpmisc, 
                knitr, kableExtra, brms, broom, broom.mixed, 
@@ -69,7 +71,7 @@ wdf_full <- df %>%
 
 
 # Main Manuscript
-## Table 1
+## Table 1 - Demographics
 ```{r table_1}
 ###### 
 #This requires a dataset with more data on the participants and can therefore not be directly reproduced
@@ -94,7 +96,7 @@ wdf_full <- df %>%
 #     pack_rows("Visit 2", 5, 8)
 ```
 
-## Figure 1
+## Figure 1 - Distribution of predictions, theta, and posterior from mixture model
 ### Figure 1a
 ```{r fig1_a}
 fig1_a <- wdf_30 %>%
@@ -173,10 +175,10 @@ samps_raw_mix <- predict(mix_m, dummy_df, re_formula = NA, transform = inv_logit
 fig1_c <- samps_raw_mix %>% 
   preprocess_samples(.) %>% 
    mutate(key = case_when(
-    as.character(key) == "Depression" ~ "Depression\n(first visit)\nN = 40",
-    as.character(key) == "Remission" ~ "Depression\n(second visit)\nN = 25",
-    as.character(key) == "Controls1" ~ "Controls\n(First visit)\nN = 42",
-    as.character(key) == "Controls2" ~ "Controls\n(second visit)\nN = 25"
+    as.character(key) == "Depression" ~ "\nDepression\n(first visit)\nN = 40\n",
+    as.character(key) == "Remission" ~ "\nDepression\n(second visit)\nN = 25\n",
+    as.character(key) == "Controls1" ~ "\nControls\n(First visit)\nN = 42\n",
+    as.character(key) == "Controls2" ~ "\nControls\n(second visit)\nN = 25\n"
   )
   ) %>% 
   ggplot(aes(value, visit, color = key, fill = key)) +
@@ -188,7 +190,8 @@ fig1_c <- samps_raw_mix %>%
     theme(legend.position = "bottom",
           legend.title = element_blank(),
           axis.title.y = element_blank(),
-          legend.text.align = 0.5) 
+          legend.text.align = 0.5,
+          legend.spacing.x = unit(0.5, 'cm')) 
 
 # Row ordering: dep, rem, cont1, cont2
 samps_mix
@@ -200,11 +203,16 @@ samps_mix
 (fig1_a | fig1_b) / (fig1_c ) +
   plot_annotation(tag_levels = "A") 
 
-fig1_c <- fig1_c + guides(fill=guide_legend(ncol=2), color=guide_legend(ncol=2))
-fig1_a + fig1_b + fig1_c + guide_area() + plot_layout(guides = "collect")
+fig1_c <- fig1_c + guides(fill=guide_legend(ncol=2),
+                          color=guide_legend(ncol=2))
+fig1_a + fig1_b + fig1_c + guide_area() + 
+  plot_layout(guides = "collect") + 
+  plot_annotation(tag_levels = "A")
+
+ggsave("publication/figs/fig1.pdf", dpi="retina", width = 10, height = 8)
 ```
 
-## Figure 2
+## Figure 2 - ROC and heatmap
 ### Fig2a
 ```{r fig2a}
 roc_pal <- c("#d18975", "#8fd175")
@@ -225,13 +233,13 @@ make_roc_plot <- function(df, clean){
   auc_30 <- auc(roc_30)[1]
   auc_full <- auc(roc_full)[1]
   
-  thres_df <- pROC::coords(roc_30, 'best', transpose = F, ret=c("threshold", "specificity", "sensitivity", "precision")) %>% 
-    bind_rows(pROC::coords(roc_full, "best", transpose = F, ret=c("threshold", "specificity", "sensitivity", "precision"))) %>% 
+  thres_df <- pROC::coords(roc_30, 'best', transpose = F, ret=c("specificity", "sensitivity", "precision")) %>% 
+    bind_rows(pROC::coords(roc_full, "best", transpose = F, ret=c("specificity", "sensitivity", "precision"))) %>% 
     mutate(AUC = c(auc_30, auc_full),
            across(where(is.numeric), round, 2),
            Type = c("Windows", "Summary")) %>% 
     relocate(Type, AUC) %>% 
-    rename(Threshold = threshold, Specificity = specificity, Sensitivity = sensitivity, Precision = precision)
+    rename(Specificity = specificity, Sensitivity = sensitivity, Precision = precision, )
   
   
   p <- ggroc(list(Windows = roc_30, Summary = roc_full), legacy.axes = T) +
@@ -280,9 +288,11 @@ fig2_b <- wdf_30_v1 %>%
 ### Figure 2 combined
 ```{r fig2}
 fig2_a + fig2_b + plot_annotation(tag_levels = "A")
+
+ggsave("publication/figs/fig2.pdf", dpi="retina", width = 10, height = 8)
 ```
 
-## Figure 3
+## Figure 3 - Preprocessing analysis
 ### fig3 a
 ```{r fig3_a}
 ns = wdf_30 %>% 
@@ -468,45 +478,51 @@ fig3_c <- rocs_window %>%
 ### Figure 3 combined
 ```{r fig3}
 fig3_a / (fig3_b | fig3_c) + plot_annotation(tag_levels = "A") 
-```
 
+ggsave("publication/figs/fig3.pdf", dpi="retina", width = 10, height = 8)
+```
 
 
 # In-text numbers
 ## Mixture-model
 ```{r}
+# model summary
 mix_m
 
-# how to correctly calculate the standard deviation of the two distributions?
-
-# mu1_intercept
-mu1 <- inv_logit_scaled(-1.18)
-# mu2_intercept
-mu2 <- inv_logit_scaled(0.38)
-
-# sigma 1
-sigma1_low <- inv_logit_scaled(-1.18 - 0.66)
-sigma1_high <- inv_logit_scaled(-1.18 + 0.66)
-# sigma 2
-sigma2_low <- inv_logit_scaled(0.38 - 0.32)
-sigma2_high <- inv_logit_scaled(0.38 + 0.32)
-
-mu1
-mu1 - sigma1_low
-sigma1_high - mu1
-# is this correct?
-# which one to report? other way to calculate sd in probability space?
-mu2
-mu2 - sigma2_low
-sigma2_high - mu2
-
+# extract means of the mixtures and estimated theta for each diagnostic group
 tidy(mix_m, parameters = "^b") %>% 
   mutate(across(where(is.numeric), ~ inv_logit_scaled(.x)))
 
-tidy(mix_m, parameters = "^sigma") %>% 
-  mutate(across(where(is.numeric), ~ inv_logit_scaled(.x)))
-# Seems way too large when looking at the distributions. ~ 0.1 more likely. 
+# calculate standard deviation of the two mixtures
+params <- tidy(mix_m, parameters = "^b_mu|^sigma")
+
+mu1 <- as.numeric(params[params$term == "b_mu1_(Intercept)", "estimate"])
+mu2 <- as.numeric(params[params$term == "b_mu2_(Intercept)", "estimate"])
+
+sigma1 <- as.numeric(params[params$term == "sigma1", "estimate"])
+sigma2 <- as.numeric(params[params$term == "sigma2", "estimate"])
+
+sigma1_low <- inv_logit_scaled(mu1 - sigma1)
+sigma1_high <- inv_logit_scaled(mu1 + sigma1)
+sigma2_low <- inv_logit_scaled(mu2 - sigma2)
+sigma2_high <- inv_logit_scaled(mu2 + sigma2)
+
+mu1_probs <- inv_logit_scaled(mu1)
+mu2_probs <- inv_logit_scaled(mu2)
+
+# sigma 1
+sigma1_low <- mu1_probs - sigma1_low
+sigma1_high <- sigma1_high - mu1_probs
+
+# not symmetric due to the non-linearities therefore taking the mean
+mean(c(sigma1_low, sigma1_high))
+# sigma 2
+sigma2_low <- mu2_probs - sigma2_low
+sigma2_high <- sigma2_high - mu2_probs
+
+mean(c(sigma2_low, sigma2_high))
 ```
+
 ## Number of correct predictions with optimal cut-off
 ```{r}
 cutoff_preds <- wdf_30 %>% 
@@ -523,7 +539,7 @@ cutoff_preds %>%
 
 
 # Supplementary Materials
-## Table S1
+## Table S1 - Interview length
 ```{r descriptive stats}
 # Table
 
@@ -554,7 +570,7 @@ seg_dur %>% merge(non_seg_dur, by=c("Diagnosis_only", "visit")) %>%
 
 ```
 
-## Figure S1
+## Figure S1 - Change from visit 1 to 2
 ### fig s1 a
 ```{r fig_s1_a}
 fig_s1_a <- wdf_30 %>% 
@@ -575,7 +591,7 @@ fig_s1_a <- wdf_30 %>%
     labs(y="Difference in P(happy)", x="ID") +
     theme(legend.title = element_blank(),
           axis.text.y = element_blank(),
-          legend.position = 'bottom')
+          legend.position = 'right')
 
 
 ```
@@ -599,7 +615,7 @@ cont_heat <- wdf_30 %>%
   labs(x = 'Time', fill='P(Happy)') +
   theme(axis.title.y = element_blank(),
         axis.text.y = element_blank(),
-        legend.position="bottom")
+        legend.position="right")
 
 dep_heat <- wdf_30 %>% 
   filter(Diagnosis_only == 'Depression') %>% 
@@ -622,30 +638,21 @@ dep_heat <- wdf_30 %>%
         legend.position = "none")
 
 
-fig_s1_b <- (dep_heat + theme(legend.position = 'none')) / cont_heat  & theme(strip.background = element_rect(color = 'grey'))
+fig_s1_b <- (dep_heat + theme(legend.position = 'none')) / cont_heat +
+  plot_layout(guides = 'collect') & theme(strip.background = element_rect(color = 'grey'))
 ```
 
 ### Figure S1 combined
-```{r fig_s1}
-layout <- "
-AAA
-AAA
-AAA
-AAA
-BBB
-BBB
-BBB
-BBB
-BBB
-BBB
-BBB
-BBB
-"
-fig_s1_a / fig_s1_b + plot_layout(design = layout) + plot_annotation(tag_levels = list(c("A", "B", "")))
+```{r fig_s1, fig.width=12.5, fig.height=10}
+
+fig_s1_a / fig_s1_b + 
+  plot_annotation(tag_levels = list(c("A", "B", "")))
+
+ggsave("publication/supplementary/fig_s1.pdf", dpi="retina", width = 12.5, height = 10)
 ```
 
 
-## Figure S2
+## Figure S2 - Difference in estimated P(Happy) between groups
 ```{r fig_s2}
 plot_and_print_dif <- function(df, col, title=NULL, xlim=NULL){
   if(is.null(title)) title <- col
@@ -682,7 +689,7 @@ dummy_cont <- plot_and_print_dif(diffs, "diff_cont", "Controls1 - Controls2")
 (dummy_cont_rem$plot + dummy_cont$plot) /
   (dummy_dep_cont$plot + dummy_dep_rem$plot) 
 
-
+ggsave("publication/supplementary/fig_s2.pdf", dpi="retina", width = 10, height = 8)
 
 tibble(dep_cont = dummy_dep_cont$quants,
        dep_rem = dummy_dep_rem$quants,
@@ -697,7 +704,7 @@ tibble(dep_cont = dummy_dep_cont$quants,
   kable_classic(full_width=F)
 ```
 
-## Figure S3
+## Figure S3 - BEST
 ### BEST - functions
 ```{r best_functions}
 # BEST t-test (Kruschke 2013)
@@ -781,7 +788,7 @@ options(mc.cores = parallel::detectCores())
 dfs <- list(Diarized = clean_v1, Raw = raw_v1, `Not diarized` = non_seg)
 brms_files <- c('best_brms', 'raw_brms', 'non_seg_brms')
 
-# Train BEST model on each dataset
+# Train/load BEST model on each dataset
 models <- dfs %>% map2(brms_files, run_BEST)
 ```
 ### BEST - plot (figure S3)
@@ -837,12 +844,14 @@ cohen_d_plot <- groups_post %>%
 
 # figure s3
 main_post_plot / cohen_d_plot +
-  plot_layout(guides = "collect", heights = unit(c(5, 0.5), c('cm'))) & 
+  plot_layout(guides = "collect", heights = unit(c(10, 1), c('cm'))) & 
   theme(legend.position = 'bottom')
+
+ggsave("publication/supplementary/fig_s3.pdf", dpi="retina", width = 10, height = 8, device = cairo_pdf)
 ```
 
 
-## Table S2
+## Table S2 - AUC on preprocessed data
 ```{r}
 clean_auc <- get_auc(df, "clean")
 raw_auc <- get_auc(df, "raw")
@@ -859,7 +868,7 @@ bind_rows(clean_auc, raw_auc, seg_auc) %>%
   pack_rows("Windows", 4, 6)
 ```
 
-## Table S3
+## Table S3 - Tabular BEST
 ```{r table_s3}
 groups_post %>%
   bind_rows(.id = "Dataset") %>%
@@ -891,7 +900,7 @@ groups_post %>%
 ```
 
 
-## Figure S4
+## Figure S4 - Prognosis
 ### fig s4 a
 ```{r}
 ### For model building see `model.Rmd` 
@@ -942,11 +951,22 @@ fig_s4b <- dep_30 %>%
 
 ### Figure S4 combined
 ```{r fig_s4}
-fig_s4a$plot / fig_s4b + plot_annotation(tag_levels = "A")
+layout <- "
+AAA
+AAA
+BBB
+BBB
+BBB
+BBB"
+fig_s4a$plot / fig_s4b + 
+  plot_annotation(tag_levels = "A") +
+  plot_layout(design = layout)
+
+ggsave("publication/supplementary/fig_s4.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 
-## Figure S5
+## Figure S5- Std of P(Happy) by participant
 ```{r fig_s5}
 # Sds by participant
 wdf_30 %>% 
@@ -960,10 +980,12 @@ wdf_30 %>%
   theme(legend.position = "none",
         axis.title.y = element_blank()) +
   labs(x = "Std of P(Happy)")
+
+ggsave("publication/supplementary/fig_s5.pdf", dpi="retina", width = 10, height = 8)
 ```
 
 
-## Table S4
+## Table S4 Tabular std of P(happy) by group
 ```{r}
 wdf_30 %>% 
   group_by(Diagnosis_visit, id_full) %>% 
@@ -974,3 +996,44 @@ wdf_30 %>%
   kable_classic(full_width=F)
 ```
 
+
+## Figure S6 - Prior and posterior predictive checks
+```{r fig_s6}
+mix_m_prior <- readRDS(here("models", "mixture_model_prior_only.rds"))
+
+pp_prior <- brms::pp_check(mix_m_prior, nsamples=100)
+pp_post <- brms::pp_check(mix_m, nsamples=100)
+
+pp_prior / pp_post + plot_annotation(tag_level="A")
+
+ggsave("publication/supplementary/fig_s6.pdf", dpi="retina", width = 10, height = 8)
+```
+
+## Figure S7 - Posterior updates
+```{r fig_s7}
+posterior_samples(mix_m) %>% 
+  select(starts_with("prior"), starts_with("b_"), starts_with("sigma")) %>% 
+  mutate(`prior_b_theta1_visit0:Diagnosis_onlyControls` = prior_b_theta1,
+         `prior_b_theta1_visit1:Diagnosis_onlyControls` = prior_b_theta1,
+         `prior_b_theta1_visit0:Diagnosis_onlyDepression` = prior_b_theta1) %>% 
+  rename(prior_mu1_Intercept = prior_Intercept_mu1,
+         prior_mu2_Intercept = prior_Intercept_mu2,
+         `prior_b_theta1_visit1:Diagnosis_onlyDepression` = prior_b_theta1) %>% 
+  select(-c(prior_cor_id_full_1, prior_cor_id_full_2, prior_sd_id_full)) %>% 
+  gather() %>% 
+  mutate(is_prior = if_else(substr(key, 1, 5) == "prior", TRUE, FALSE),
+         key = if_else(substr(key, 1, 5) == "prior", 
+                       substr(key, 7, 100),
+                       key),
+         key = if_else(substr(key, 1, 1) == "b",
+                       substr(key, 3, 100),
+                       key))  %>% 
+  
+  ggplot(aes(value, fill = is_prior)) +
+    geom_density(alpha=0.3) +
+    facet_wrap(~key, scale="free") + 
+    theme_minimal() +
+    scale_fill_brewer(palette = "Pastel1")
+
+ggsave("publication/supplementary/fig_s7.pdf", dpi="retina", width = 10, height = 8)
+```

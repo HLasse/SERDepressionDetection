@@ -1,0 +1,195 @@
+---
+title: "Models"
+author: "Lasse Hansen"
+output: html_document
+---
+
+# Setup
+```{r setup}
+pacman::p_load(tidyverse, RColorBrewer, patchwork, colorspace,
+               brms, broom, broom.mixed, tidybayes, 
+               bayesplot, cmdstanr, here, glue, groupdata2,
+               pROC, knitr, kableExtra)
+
+df <- pacman::p_load(tidyverse, RColorBrewer, patchwork,
+               colorspace, scico, pROC, ggpmisc, 
+               knitr, kableExtra, brms, broom, broom.mixed, 
+               tidybayes, bayesplot, here, glue)
+
+
+# Read MFCC data
+df <- read.csv("data/publication_data.csv") %>% 
+  mutate(visit = as.numeric(visit) - 1,
+         visit = as.factor(visit))
+
+# function to convert probabilities back to log odds space
+prob_to_log_odds <- function(prob) log(prob / (1 - prob))
+
+# Filtered datasets only including the clean data (no background noise) and 30 second time bins or no windowing
+wdf_30 <- df %>% 
+  filter(clean == 'clean', window_size == '30') %>% 
+  mutate(log_odds = prob_to_log_odds(probs))
+
+wdf_full <- df %>% 
+  filter(clean == 'clean', window_size == 'full')
+
+# Set ggplot theme
+theme_set(theme_minimal(base_size = 18))
+#theme_set(theme_minimal())
+
+# Mute annoying summarise message
+options(dplyr.summarise.inform=F)
+
+options(mc.cores = parallel::detectCores())
+
+d_v_pal <- darken(RColorBrewer::brewer.pal(6, 'Paired'), 0.2)[c(1,2,5,6)]
+rem_pal <- d_v_pal
+rem_pal[4] <- "#34BF39"
+
+```
+
+# Mixture model
+```{r}
+# create model dir if it doesn't already exist
+ifelse(!dir.exists(here("models")), dir.create(here("models")), FALSE)
+
+mix <- mixture(gaussian, gaussian)
+ 
+mix_f <- bf(
+  log_odds ~ 1,
+  theta1 ~ 0 + visit:Diagnosis_only + (0 + visit | gr(id_full, by=Diagnosis_only))
+)
+ 
+
+# get_prior(mix_f, family = mix, data = wdf_30)
+ 
+mix_priors <- c(
+  prior(normal(0, 1), Intercept, dpar = mu1),
+  prior(normal(0, 1), Intercept, dpar = mu2),
+  prior(normal(1, .5), sigma1),
+  prior(normal(1, .5), sigma2),
+  prior(lkj(1), class=cor),
+  prior(normal(0, 1), b, dpar = theta1),
+  prior(normal(3, 1), sd, dpar = theta1)
+ # prior(normal(0, 1), sd, dpar = theta1)
+)
+ 
+ 
+n_chains = 4
+n_samples = 4000
+
+# Full model
+#job::job({
+mix_m <- brm(
+  mix_f,
+  wdf_30,
+  backend="cmdstanr",
+  chains=n_chains,
+  iter=n_samples,
+  prior = mix_priors,
+  sample_prior=T,
+  family = mix,
+  control = list(adapt_delta = 0.99),
+  inits =0,
+  file=here("models", "mixture_model_sdprior_3_1")
+)
+
+#})
+
+# Prior only
+mix_m_prior <- brm(
+  mix_f,
+  wdf_30,
+  backend="cmdstanr",
+  chains=n_chains,
+  iter=n_samples,
+  prior = mix_priors,
+  sample_prior="only",
+  family = mix,
+  control = list(adapt_delta = 0.99),
+  inits =0,
+  file=here("models", "mixture_model_prior_only")
+)
+```
+
+# BEST model
+```{r best_run_models}
+# BEST t-test (Kruschke 2013)
+# Code adapted from https://www.andrewheiss.com/blog/2019/01/29/diff-means-half-dozen-ways/#regression-best-with-priors-on-variables-instead-of-difference
+run_BEST <- function(df, file){
+  # Setting reasonable priors
+  priors <- c(set_prior("normal(0, 0.5)", class = "b"), #
+              # Setting prior for nu to 1/29 in line with BEST paper
+              set_prior("exponential(1.0/29)", class = "nu"))
+  
+  best_brms <- brm(bf(probs ~ 0 + Diagnosis_only + 
+                        (1|gr(id_full, by=Diagnosis_only)), 
+                      # assessing the effect of diagnosis on probs (no intercept)
+                      sigma ~ 0 + Diagnosis_only + 
+                        (1|gr(id_full, by=Diagnosis_only))), 
+                   # assessing the whether there is a difference in sigmas by diagnosis
+                   prior = priors,
+                   data=df, 
+                   family=student,
+                   chains=4,
+                   iter=6000,
+                   warmup=2000,
+                   seed=60,
+                   file = file)
+}
+
+# Setting up dataframes
+clean_v1 <- wdf_30 %>% 
+  filter(visit == 1)
+
+raw_v1 <- df %>% 
+  filter(visit == 1, clean == 'raw', window_size == '30')
+
+non_seg <- seg_df %>% 
+  filter(visit == 1, segmented == F)
+
+# Parallel processing
+options(mc.cores = parallel::detectCores())
+
+dfs <- list(Diarized = clean_v1, Raw = raw_v1, `Not diarized` = non_seg)
+brms_files <- c('best_brms', 'raw_brms', 'non_seg_brms')
+
+# Train BEST model on each dataset
+models <- dfs %>% map2(brms_files, run_BEST)
+```
+
+# Prognosis
+```{r prognosis_model}
+# Finding those in remission
+remission_ids <- wdf_full %>% 
+  filter(Diagnosis_only == "Depression") %>% 
+  group_by(id_full) %>% 
+  summarise(n = n()) %>%
+  filter(n == 2) %>% 
+  pull(id_full)
+
+
+priors <- c(set_prior("student_t(3, 0, 1)", class = "b"),
+            set_prior("student_t(3, 0, 1)", class = "sd"))
+
+# Extracting depression patients at first visit 
+dep_30 <- wdf_30 %>% 
+  select(log_odds, id_full, Diagnosis_only, visit, probs) %>% 
+  filter(Diagnosis_only == "Depression", visit == 0) %>% 
+  mutate(Remission = if_else(id_full %in% remission_ids, 1, 0)) 
+
+# Logistic regression to predict log_odds from remission
+brms_prognosis <- brm(log_odds ~ 
+                        Remission + 
+                        (1|id_full),
+                      prior = priors,
+                      data=dep_30, 
+                      family=gaussian,
+                      control = list(adapt_delta = 0.95),
+                      chains=4,
+                      iter=8000,
+                      warmup=2000,
+                      seed=60,
+                      file = "prognosis")
+
+```
