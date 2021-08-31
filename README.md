@@ -1,6 +1,6 @@
 # SERDepressionDetection
 
-Code to reproduce the analysis from the paper "A Generalizable Speech Emotion Recognition Model Reveals Depression and Remission". 
+Code to reproduce the analysis from the paper "A Generalizable Speech Emotion Recognition Model Reveals Depression and Remission". This repository contains the models used for the analysis, i.e. the Bayesian mixture model, prognosis model, and BEST model. For the SER model, we refer to [Sechidis et al. (2021)](https://doi.org/10.1016/j.artmed.2021.102061).
 
 ## Structure
 `Models.Rmd` contains all code for model creation.
@@ -9,4 +9,4 @@ Code to reproduce the analysis from the paper "A Generalizable Speech Emotion Re
 
 `models/` contains the trained brms models. To re-train, delete or rename the files and run the code in `Models.Rmd`.
 
-`data/` contains the output from the SER model for all time windows as well as participant metadata. 
+`data/` contains the output from the SER model for all time windows as well as non-sensitive participant metadata. 
