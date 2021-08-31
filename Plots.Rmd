@@ -171,26 +171,28 @@ dummy_df <- tribble(~Diagnosis_only, ~visit,
 samps_mix <- predict(mix_m, dummy_df, re_formula = NA, transform = inv_logit_scaled)
 samps_raw_mix <- predict(mix_m, dummy_df, re_formula = NA, transform = inv_logit_scaled, summary=F) 
 
+
 fig1_c <- samps_raw_mix %>% 
   preprocess_samples(.) %>% 
    mutate(key = case_when(
-    as.character(key) == "Depression" ~ "\nDepression\n(first visit)\nN = 40\n",
-    as.character(key) == "Remission" ~ "\nDepression\n(second visit)\nN = 25\n",
+    as.character(key) == "Depression" ~ "\nDepression\n(First visit)\nN = 40\n",
+    as.character(key) == "Remission" ~ "\nDepression\n(Second visit)\nN = 25\n",
     as.character(key) == "Controls1" ~ "\nControls\n(First visit)\nN = 42\n",
-    as.character(key) == "Controls2" ~ "\nControls\n(second visit)\nN = 25\n"
+    as.character(key) == "Controls2" ~ "\nControls\n(Second visit)\nN = 25\n"
   )
   ) %>% 
-  ggplot(aes(value, visit, color = key, fill = key)) +
-    stat_halfeye(alpha = 0.5) +
-    coord_cartesian(xlim=c(0, 1)) +
-    scale_color_manual(values = rem_pal) +
-    scale_fill_manual(values = rem_pal) +
-    labs(x = "P(Happy)") + 
-    theme(legend.position = "bottom",
-          legend.title = element_blank(),
-          axis.title.y = element_blank(),
-          legend.text.align = 0.5,
-          legend.spacing.x = unit(0.5, 'cm')) 
+ggplot(aes(value, visit, color = key, fill = key)) +
+  stat_pointinterval(position=position_dodge(0.1), alpha=0.5, justification=0.4) + 
+  stat_slab(alpha=0.5) + 
+  coord_cartesian(xlim=c(0, 1)) +
+  scale_color_manual(values = rem_pal) +
+  scale_fill_manual(values = rem_pal) +
+  labs(x = "P(Happy)") + 
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        axis.title.y = element_blank(),
+        legend.text.align = 0.5,
+        legend.spacing.x = unit(0.5, 'cm')) 
 
 # Row ordering: dep, rem, cont1, cont2
 samps_mix
@@ -1020,19 +1022,36 @@ posterior_samples(mix_m) %>%
          `prior_b_theta1_visit1:Diagnosis_onlyDepression` = prior_b_theta1) %>% 
   select(-c(prior_cor_id_full_1, prior_cor_id_full_2, prior_sd_id_full)) %>% 
   gather() %>% 
-  mutate(is_prior = if_else(substr(key, 1, 5) == "prior", TRUE, FALSE),
+  mutate(is_prior = if_else(substr(key, 1, 5) == "prior", "Prior", "Posterior"),
          key = if_else(substr(key, 1, 5) == "prior", 
                        substr(key, 7, 100),
                        key),
          key = if_else(substr(key, 1, 1) == "b",
                        substr(key, 3, 100),
-                       key))  %>% 
+                       key),
+         key = str_remove(key, "Diagnosis_only")
+  )  %>% 
   
   ggplot(aes(value, fill = is_prior)) +
-    geom_density(alpha=0.3) +
-    facet_wrap(~key, scale="free") + 
-    theme_minimal() +
-    scale_fill_brewer(palette = "Pastel1")
+  geom_density(alpha=0.3) +
+  facet_wrap(~key, scale="free") + 
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(x = "Log odds") + 
+  theme(legend.position = "bottom",
+        legend.title = element_blank())
 
 ggsave("supplementary/fig_s7.pdf", dpi="retina", width = 10, height = 8)
 ```
+
+
+## Package citations
+```{r}
+pat <- "package:(.*)"
+packages <- sub(pat, "\\1", grep(pat, search(), value = TRUE))
+cite_packages <- c("base", packages[-(which(packages == "stats"):length(packages))]) #Adds base R citation and removes base packages
+
+capture.output(
+	for (i in cite_packages) print(citation(i), style = "BibTeX"),
+	file = "R_cite.bib")
+```
+
