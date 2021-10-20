@@ -70,30 +70,42 @@ wdf_full <- df %>%
 
 
 # Main Manuscript
-## Table 1 - Demographics
+## Table 1 - Clinical Information
 ```{r table_1}
 ###### 
 #This requires a dataset with more data on the participants and can therefore not be directly reproduced
 ######
 # 
-# wdf_full %>% 
-#   group_by(visit, Diagnosis_only, Gender) %>% 
-#   summarise(n = n(), 
-#             Hamilton = mean(HamD17_Before, na.rm=TRUE), 
-#             Hamilton_IQR = IQR(HamD17_Before, na.rm=TRUE), 
-#             age = mean(Age, na.rm=T), 
-#             Age_min = min(Age, na.rm=T), 
-#             Age_max = max(Age, na.rm=T)) %>% 
-#     mutate(age_range = paste(Age_min, Age_max, sep="-")) %>% 
-#     ungroup() %>% 
-#     select(-c(Age_min, Age_max, visit)) %>%
-#     kbl(digits=1, col.names = c("Diagnosis", "Gender", "N",
-#                               "Hamilton mean", "Hamilton IQR",
-#                               "Age mean", "Age Range")) %>% 
-#     kable_classic(full_width = F) %>% 
-#     pack_rows("Visit 1", 1, 4) %>% 
-#     pack_rows("Visit 2", 5, 8)
+# library(table1)
+# 
+# wdf_full <- wdf_full %>% 
+#   mutate(HamD_17 = ifelse(visit == 1, HamD17_Before, HamD17_After))
+# 
+# wdf_full$Gender <- factor(wdf_full$Gender, levels=c("f", "m"), labels=c("Female", "Male"))
+# wdf_full$visit <- factor(wdf_full$visit, levels=c("1", "2"), labels=c("Visit 1", "Visit 2"))
+# 
+# 
+# label(wdf_full$Gender) <- "Gender"
+# label(wdf_full$Education) <- "Education (years)"
+# label(wdf_full$HamD_17) <- "HamD-17"
+# label(wdf_full$WorkingMemory) <- "Working Memory (OTS)"
+# label(wdf_full$VerbalMemory) <- "Verbal Memory (HVLT-R)"
+# label(wdf_full$SustainedAttention) <- "Sustained Attention (RVP)"
+# 
+# table1(~ Age + Gender  + Education + HamD_17 + WorkingMemory + VerbalMemory + SustainedAttention
+#        | visit * Diagnosis_only, 
+#        data=wdf_full,
+#        overall=FALSE,
+#        # footnote=c(
+#        # "HamD-17 = Hamilton Depression Rating Scale (17-item version).",
+#        # "Working Memory (OTS) = One Touch Stockings of Cambridge test.",
+#        # "Verbal Memory (HVLT-R) = Hopkins Verbal Learning Test–Revised.",
+#        # "Sustained Attention (RVP) = Rapid Visual Information Processing test.")
+# )
+
+
 ```
+
 
 ## Figure 1 - Distribution of predictions, theta, and posterior from mixture model
 ### Figure 1a
@@ -1042,6 +1054,41 @@ posterior_samples(mix_m) %>%
 
 ggsave("supplementary/fig_s7.pdf", dpi="retina", width = 10, height = 8)
 ```
+
+## Figure S8 - Delta hamilton as a function of delta P(Happy)
+```{r}
+###### 
+#This requires a dataset with more data on the participants and can therefore not be directly reproduced
+######
+
+# remission_ids <- wdf_full %>% 
+#   filter(Diagnosis_only == "Depression") %>% 
+#   group_by(id_full) %>% 
+#   summarise(n = n()) %>%
+#   filter(n == 2) %>% 
+#   pull(id_full)
+# 
+# wdf_30 %>% 
+#   select(probs, id_full, Diagnosis_only, visit, probs, HamD17_Before, HamD17_After) %>% 
+#   filter(Diagnosis_only == "Depression") %>% 
+#   group_by(id_full, visit) %>% 
+#   summarise(ham_before = mean(HamD17_Before), ham_after = mean(HamD17_After),
+#             probs = mean(probs)) %>%  
+#   group_by(id_full) %>% 
+#   summarise(d_probs = diff(probs), d_ham = ham_before - ham_after) %>% 
+#   distinct() %>% 
+#   ggplot(aes(x=d_ham, y=d_probs)) +
+#   geom_point() +
+#   labs(y = "\u0394 P(Happy)", x = "\u0394 HamD-17")
+# 
+# ggsave("supplementary/fig_s8.tiff", dpi="retina", width = 10, height = 8)
+
+
+
+
+
+```
+
 
 
 ## Package citations

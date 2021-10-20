@@ -78,7 +78,6 @@ mix_f <- bf(
   theta1 ~ 0 + visit:Diagnosis_only + (0 + visit | gr(id_full, by=Diagnosis_only))
 )
  
-
 # get_prior(mix_f, family = mix, data = wdf_30)
  
 mix_priors <- c(
