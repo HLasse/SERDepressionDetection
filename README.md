@@ -11,4 +11,4 @@ Code to reproduce the analysis from the paper "A Generalizable Speech Emotion Re
 
 `data/` contains the output from the SER model for all time windows as well as non-sensitive participant metadata. 
 
-`data/summary` contains aggregated MFCC features for the different window sizes indicated by the file name. `None` means no windowing, i.e. aggregated over the entire recording. 
+`data/summary` contains CSV files of the aggregated MFCC features for the different window sizes. Window size is indicated by the file name. `None` means no windowing, i.e. aggregated over the entire recording. 
