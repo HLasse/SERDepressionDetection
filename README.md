@@ -10,3 +10,5 @@ Code to reproduce the analysis from the paper "A Generalizable Speech Emotion Re
 `models/` contains the trained brms models. To re-train, delete or rename the files and run the code in `Models.Rmd`.
 
 `data/` contains the output from the SER model for all time windows as well as non-sensitive participant metadata. 
+
+`data/summary` contains aggregated MFCC features for the different window sizes indicated by the file name. `None` means no windowing, i.e. aggregated over the entire recording. 
